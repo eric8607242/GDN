@@ -12,7 +12,10 @@ class GraphAttentionFE(MessagePassing):
 
         self.attention_vector = nn.Linear((out_channesl+out_channesl)*2, 1)
 
-    def forward(self, edge_indexs, x, node_embeddings):
+        self.alpha_weight = None
+        self.edge_indexs = None
+
+    def forward(self, edge_indexs, x, node_embeddings, return_attention_weights=False):
         """
         Args:
             x (batch_size*node_num, feature_num)
@@ -22,11 +25,14 @@ class GraphAttentionFE(MessagePassing):
 
         edge_indexs, _ = add_self_loops(edge_indexs, num_nodes=x.size(0))
 
-        out = self.propagate(edge_indexs, x=x, node_embeddings=node_embeddings)
+        out = self.propagate(edge_indexs, x=x, node_embeddings=node_embeddings, return_attention_weights=return_attention_weights)
+
+        if return_attention_weights:
+            return out, self.alpha_weight, self.edge_indexs
         return out
 
 
-    def message(self, x_i, x_j, edge_index_i, edge_index_j, node_embeddings):
+    def message(self, x_i, x_j, edge_index_i, edge_index_j, node_embeddings, return_attention_weights):
         node_embedding_i = node_embeddings[edge_index_i]
         node_embedding_j = node_embeddings[edge_index_j]
 
@@ -37,6 +43,10 @@ class GraphAttentionFE(MessagePassing):
         alpha = self.attention_vector(g)
         alpha = F.leaky_relu(alpha)
         alpha = softmax(alpha, index=edge_index_i)
+
+        if return_attention_weights:
+            self.alpha_weight = alpha
+            self.edge_indexs = torch.stack((edge_index_i, edge_index_j))
 
         attention_x_j = alpha * x_j
         return attention_x_j

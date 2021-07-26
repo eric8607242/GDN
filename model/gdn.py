@@ -32,7 +32,7 @@ class GDNModel(nn.Module):
 
         self._initialize_parameters()
 
-    def forward(self, x):
+    def forward(self, x, return_attention_weights=False):
         batch_size, node_num, feature_num = x.shape
         edge_num = self.edge_indexs.shape[1]
 
@@ -51,7 +51,12 @@ class GDNModel(nn.Module):
 
         node_embeddings = node_embeddings.repeat(batch_size, 1)
         x = x.reshape(-1, feature_num)
-        y = self.fe(batch_edge_index, x, node_embeddings)
+        
+        if return_attention_weights:
+            y, alpha_weights, edge_indexs = self.fe(batch_edge_index, x, node_embeddings, return_attention_weights)
+        else:
+            y = self.fe(batch_edge_index, x, node_embeddings, return_attention_weights)
+
         y = F.relu(self.bn_1(y))
         y = y * node_embeddings
         y = y.reshape(-1, self.embedding_dim)
@@ -61,6 +66,9 @@ class GDNModel(nn.Module):
         y = self.dropout(y)
         y = self.linear(y)
         y = y.reshape(batch_size, node_num)
+        
+        if return_attention_weights:
+            return y, alpha_weights, edge_indexs, node_similarity
         return y
 
     def _get_topk_edge_indexs(self, topk_similarity_node_index):

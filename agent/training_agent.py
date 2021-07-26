@@ -51,7 +51,7 @@ class TrainingAgnet:
         self.criterion = criterion.to(self.device)
         self.criterion = self._parallel_process(self.criterion)
 
-        self.logging_tracker = LoggingTracker(self.writer)
+        self.logging_tracker = LoggingTracker(self.writer, self.config, title)
 
         self._optimizer_init(self.model, self.criterion)
 
@@ -78,9 +78,9 @@ class TrainingAgnet:
             self._training_step(self.model, self.train_loader, epoch)
             #val_loss = self._validate_step(self.model, self.val_loader, epoch)
 
-            self.evaluate(self.model, self.val_loader, self.test_loader, epoch)
+            test_alpha_weights_list, test_edge_index, node_similarity = self.evaluate(self.model, self.val_loader, self.test_loader, epoch)
 
-            self.logging_tracker.record(epoch)
+            self.logging_tracker.record(test_alpha_weights_list, test_edge_index, node_similarity, epoch)
 
     def _training_step(self, model, train_loader, epoch, print_freq=20):
         losses = AverageMeter()
@@ -147,14 +147,13 @@ class TrainingAgnet:
         model.eval()
         start_time = time.time()
 
-        val_predict_list, val_gt_list, val_label_list = self._evaluate_step(model, val_loader)
-        test_predict_list, test_gt_list, test_label_list = self._evaluate_step(model, test_loader)
+        val_predict_list, val_gt_list, val_label_list, _, _, _ = self._evaluate_step(model, val_loader)
+        test_predict_list, test_gt_list, test_label_list, test_alpha_weights_list, test_edge_index, node_similarity = self._evaluate_step(model, test_loader)
 
         val_err_scores = self._evaluate_err_score(val_predict_list, val_gt_list)
         test_err_scores = self._evaluate_err_score(test_predict_list, test_gt_list)
 
         anomaly_threshold = torch.max(val_err_scores)
-        print(anomaly_threshold)
 
         val_predict_anomaly = val_err_scores > anomaly_threshold
         val_predict_anomaly = val_predict_anomaly.long().tolist()
@@ -178,25 +177,46 @@ class TrainingAgnet:
             f" Time {time.time() - start_time:.2f}")
         self.logger.info("Evaluating End !")
 
+        return test_alpha_weights_list, test_edge_index, node_similarity
+
     def _evaluate_step(self, model, loader):
+        edge_index = None
+        alpha_weights = None
+        node_similarity = None
+
         predict_list = []
         gt_list = []
         label_list = []
         with torch.no_grad():
             for step, (X, y, label) in enumerate(loader):
+                N = X.shape[0]
                 X, y, label = X.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True), label.to(self.device, non_blocking=True)
 
-                out = model(X)
+                out, alpha, topk_edge_index, n_similarity = model(X, return_attention_weights=True)
 
                 predict_list.append(out.cpu().detach().clone())
                 gt_list.append(y.cpu())
                 label_list.append(label.cpu())
 
+                if edge_index is None:
+                    alpha = alpha.cpu().detach().clone()
+                    total_edge_num = topk_edge_index.shape[1]
+                    topk_edge_index = topk_edge_index.cpu().detach().clone()
+
+                    index  = topk_edge_index[0].sort()[1][:total_edge_num//N]
+
+                    alpha = alpha[index]
+                    topk_edge_index = topk_edge_index[:, index]
+
+                    edge_index = topk_edge_index
+                    alpha_weights = alpha
+                    node_similarity = n_similarity.cpu().detach().clone()
+
         predict_list = torch.cat(predict_list)
         gt_list = torch.cat(gt_list)
         label_list = torch.cat(label_list)
 
-        return predict_list, gt_list, label_list
+        return predict_list, gt_list, label_list, alpha_weights, edge_index, node_similarity
 
     def _evaluate_err_score(self, predict_list, gt_list, eps=1e-2):
         err_scores = torch.abs(gt_list - predict_list)
