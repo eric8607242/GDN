@@ -23,8 +23,6 @@ class GraphAttentionFE(MessagePassing):
         edge_indexs, _ = add_self_loops(edge_indexs, num_nodes=x.size(0))
 
         out = self.propagate(edge_indexs, x=x, node_embeddings=node_embeddings)
-
-        out = out * node_embeddings
         return out
 
 

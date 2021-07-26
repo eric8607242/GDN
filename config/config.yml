@@ -1,11 +1,12 @@
 agent:
     main_agent: "TrainingAgnet"
     criterion_agent: "MSELoss"
+    #criterion_agent: "L1Loss"
     model_agent: "GDN"
 
 train:
     resume: False
-    random_seed: 1234
+    random_seed: 6799
     device: "cuda"
     ngpu: 1
     epochs: 50
@@ -25,12 +26,12 @@ criterion:
 
 dataset:
     dataset: "wadi"
-    dataset_path: "./data/SWaT_interval_10/"
+    dataset_path: "./data/SWaT_interval_60_normalize_filterfirst_total/"
     classes: 0
     input_size: 0
 
-    batch_size: 64
-    num_workers: 4
+    batch_size: 16
+    num_workers: 1
     train_portion: 0.9
 
     slide_win: 5
@@ -38,11 +39,11 @@ dataset:
 
 optim:
     optimizer: "adam"
-    lr: 0.00005
+    lr: 0.001
     weight_decay: 0.0
     momentum: 0.9
     alpha: 0.9
-    beta: 0.99
+    beta: 0.9
 
     scheduler: "cosine"
     decay_step: 10

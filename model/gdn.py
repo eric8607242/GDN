@@ -25,6 +25,11 @@ class GDNModel(nn.Module):
 
         self.linear = nn.Linear(self.embedding_dim, 1)
 
+        self.bn_1 = nn.BatchNorm1d(self.embedding_dim)
+        self.bn_2 = nn.BatchNorm1d(self.embedding_dim)
+
+        self.dropout = nn.Dropout(0.2)
+
         self._initialize_parameters()
 
     def forward(self, x):
@@ -33,20 +38,27 @@ class GDNModel(nn.Module):
 
         node_embeddings = self.embedding(torch.arange(node_num).to(self.device))
 
-        dot_embeddings = torch.mm(node_embeddings, node_embeddings.T)
-        embeddings_norm = node_embeddings.norm(dim=-1).reshape(-1, 1)
+        weight_vector = node_embeddings.detach().clone()
+        dot_embeddings = torch.mm(weight_vector, weight_vector.T)
+        embeddings_norm = weight_vector.norm(dim=-1).reshape(-1, 1)
         node_similarity = dot_embeddings / torch.mm(embeddings_norm, embeddings_norm.T)
 
         topk_similarity_node_index = torch.topk(node_similarity, self.topk, dim=-1)[1]
 
         topk_edge_indexs = self._get_topk_edge_indexs(topk_similarity_node_index)
+        #topk_edge_indexs = self.edge_indexs.to(self.device)
         batch_edge_index = self._get_batch_edge_index(topk_edge_indexs, batch_size, node_num)
 
         node_embeddings = node_embeddings.repeat(batch_size, 1)
         x = x.reshape(-1, feature_num)
         y = self.fe(batch_edge_index, x, node_embeddings)
+        y = F.relu(self.bn_1(y))
+        y = y * node_embeddings
         y = y.reshape(-1, self.embedding_dim)
 
+        y = F.relu(self.bn_2(y))
+
+        y = self.dropout(y)
         y = self.linear(y)
         y = y.reshape(batch_size, node_num)
         return y

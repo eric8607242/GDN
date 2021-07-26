@@ -14,6 +14,8 @@ from criterion import get_criterion
 from dataflow import get_dataloader
 from model import get_model_class
 
+from .logging_tracker import LoggingTracker
+
 class TrainingAgnet:
     def __init__(self, config, title):
         self.config = config
@@ -49,6 +51,8 @@ class TrainingAgnet:
         self.criterion = criterion.to(self.device)
         self.criterion = self._parallel_process(self.criterion)
 
+        self.logging_tracker = LoggingTracker(self.writer)
+
         self._optimizer_init(self.model, self.criterion)
 
         self.epochs = config["train"]["epochs"]
@@ -72,10 +76,11 @@ class TrainingAgnet:
             self.logger.info(f"Learning Rate : {self.optimizer.param_groups[0]['lr']:.8f}")
 
             self._training_step(self.model, self.train_loader, epoch)
-            val_loss = self._validate_step(self.model, self.val_loader, epoch)
+            #val_loss = self._validate_step(self.model, self.val_loader, epoch)
 
             self.evaluate(self.model, self.val_loader, self.test_loader, epoch)
 
+            self.logging_tracker.record(epoch)
 
     def _training_step(self, model, train_loader, epoch, print_freq=20):
         losses = AverageMeter()
@@ -87,10 +92,13 @@ class TrainingAgnet:
             X, y, label = X.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True), label.to(self.device, non_blocking=True)
 
             N = X.shape[0]
+            self.optimizer.zero_grad()
             out = model(X)
             
             loss = self.criterion(out, y)
             loss.backward()
+
+            self.logging_tracker.step(out, y)
 
             self.optimizer.step()
 
@@ -146,6 +154,7 @@ class TrainingAgnet:
         test_err_scores = self._evaluate_err_score(test_predict_list, test_gt_list)
 
         anomaly_threshold = torch.max(val_err_scores)
+        print(anomaly_threshold)
 
         val_predict_anomaly = val_err_scores > anomaly_threshold
         val_predict_anomaly = val_predict_anomaly.long().tolist()
@@ -154,15 +163,19 @@ class TrainingAgnet:
         test_predict_anomaly = test_predict_anomaly.long().tolist()
 
         val_label_list = val_label_list.tolist()
-        val_f1_score = f1_score(val_label_list, val_predict_anomaly, average="macro")
 
         test_label_list = test_label_list.tolist()
-        test_f1_score = f1_score(test_label_list, test_predict_anomaly, average="macro")
+        test_f1_score = f1_score(test_label_list, test_predict_anomaly)
+        test_recall_score = recall_score(test_label_list, test_predict_anomaly)
+        test_precision_score = precision_score(test_label_list, test_predict_anomaly)
 
         self.writer.add_scalar("Test/_f1_score/", test_f1_score, epoch)
+        self.writer.add_scalar("Test/_precision/", test_precision_score, epoch)
+        self.writer.add_scalar("Test/_recall/", test_recall_score, epoch)
         self.logger.info(
-            f"Test: [{epoch+1:3d}/{self.epochs}] Final F1 Score {test_f1_score}" 
-            f"Time {time.time() - start_time:.2f}")
+            f"Test: [{epoch+1:3d}/{self.epochs}] Final F1 Score {test_f1_score}"
+            f" Final Recall Score {test_recall_score} Final Precision Score {test_precision_score}"
+            f" Time {time.time() - start_time:.2f}")
         self.logger.info("Evaluating End !")
 
     def _evaluate_step(self, model, loader):
@@ -185,14 +198,14 @@ class TrainingAgnet:
 
         return predict_list, gt_list, label_list
 
-    def _evaluate_err_score(self, predict_list, gt_list, eps=1e-5):
+    def _evaluate_err_score(self, predict_list, gt_list, eps=1e-2):
         err_scores = torch.abs(gt_list - predict_list)
 
         err_scores_median = torch.median(err_scores, dim=0)[0]
         err_scores_quantile_1 = torch.quantile(err_scores, q=0.25, dim=0)
         err_scores_quantile_3 = torch.quantile(err_scores, q=0.75, dim=0)
 
-        normalize_err_scores = (err_scores - err_scores_median) / (err_scores_quantile_3 - err_scores_quantile_1+eps)
+        normalize_err_scores = (err_scores - err_scores_median) / (torch.abs(err_scores_quantile_3 - err_scores_quantile_1)+eps)
 
         err_score = torch.max(normalize_err_scores, dim=-1)[0]
         return err_score
